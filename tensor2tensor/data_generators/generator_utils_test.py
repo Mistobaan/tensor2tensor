@@ -52,6 +52,28 @@ class GeneratorUtilsTest(tf.test.TestCase):
     os.remove(tmp_file_path + "-train-00000-of-00001")
     os.remove(tmp_file_path)
 
+  def testGenerateFilesParallel(self):
+    tmp_dir = self.get_temp_dir()
+    (_, tmp_file_path) = tempfile.mkstemp(dir=tmp_dir)
+    tmp_file_name = os.path.basename(tmp_file_path)
+
+    # Generate a trivial file and assert the file exists.
+    def test_generator():
+      for i in range(1000):
+        yield {"inputs": [1], "target": [1]}
+
+    num_shards = 8
+    num_threads = num_shards
+    filenames = generator_utils.train_data_filenames(tmp_file_name, tmp_dir, num_shards)
+    generator_utils.generate_files(test_generator(), filenames, num_threads=num_threads)
+    for idx in range(num_threads):
+      self.assertTrue(tf.gfile.Exists(tmp_file_path + "-train-%.5d-of-%.5d" % (idx, num_threads)))
+
+    # Clean up.
+    for idx in range(num_threads):
+      os.remove(tmp_file_path + "-train-%.5d-of-%.5d" % (idx, num_threads))
+    os.remove(tmp_file_path)
+
   def testMaybeDownload(self):
     tmp_dir = self.get_temp_dir()
     (_, tmp_file_path) = tempfile.mkstemp(dir=tmp_dir)

@@ -25,7 +25,8 @@ import io
 import os
 import random
 import tarfile
-
+from multiprocessing import pool 
+import multiprocessing
 # Dependency imports
 
 import requests
@@ -125,7 +126,7 @@ def shard_filepath(fname, num_shards):
   ]
 
 
-def generate_files(generator, output_filenames, max_cases=None):
+def generate_files(generator, output_filenames, max_cases=None, num_threads=None):
   """Generate cases from a generator and save as TFRecord files.
 
   Generated cases are transformed to tf.Example protos and saved as TFRecords
@@ -136,19 +137,32 @@ def generate_files(generator, output_filenames, max_cases=None):
     output_filenames: List of output file paths.
     max_cases: maximum number of cases to get from the generator;
       if None (default), we use the generator until StopIteration is raised.
+    num_threads: if None (default) we use multiprocessing.cpu_count()
   """
+  if num_threads is None:
+    num_threads = multiprocessing.cpu_count()
+  tpool = pool.ThreadPool(num_threads)
   num_shards = len(output_filenames)
+
+  def gen_aux():
+    counter, shard = 0, 0
+    for case in generator:
+      if counter > 0 and counter % 100000 == 0:
+        tf.logging.info("Generating case %d." % counter)
+      counter += 1
+      if max_cases and counter > max_cases:
+        break
+      shard = (shard + 1) % num_shards
+      yield (shard, case)
+
+  def to_example_aux(args):
+    shard, case = args
+    return shard, to_example(case)
+
   writers = [tf.python_io.TFRecordWriter(fname) for fname in output_filenames]
-  counter, shard = 0, 0
-  for case in generator:
-    if counter > 0 and counter % 100000 == 0:
-      tf.logging.info("Generating case %d." % counter)
-    counter += 1
-    if max_cases and counter > max_cases:
-      break
-    sequence_example = to_example(case)
+  
+  for shard, sequence_example in tpool.imap_unordered(to_example_aux, gen_aux()):
     writers[shard].write(sequence_example.SerializeToString())
-    shard = (shard + 1) % num_shards
 
   for writer in writers:
     writer.close()
